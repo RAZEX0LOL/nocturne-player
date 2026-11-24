@@ -21,6 +21,20 @@ class ContractTest {
     private fun JsonObject.int(key: String) = this[key]?.jsonPrimitive?.intOrNull
     private fun JsonObject.map(key: String) = (this[key] as? JsonObject)?.mapValues { it.value.jsonPrimitive.content } ?: emptyMap()
 
+    @Test fun trackToolsKeepMetadataAndPlaybackOrder() {
+        val songs = listOf(
+            Song("old", "Écho", duration = 100.0, created = "2026-01-01T00:00:00Z"),
+            Song("new", "Echo remix", duration = 50.0, created = "2026-02-01T00:00:00.000Z"),
+            Song("unknown", "Other"),
+        )
+        val shown = SongOrder.newest.apply(songs, " echo ")
+        assertEquals(listOf("new", "old"), shown.map { it.id })
+        assertEquals(listOf("new", "old", "unknown"), SongOrder.newest.apply(songs, "").map { it.id })
+        assertTrue(SongOrder.original.apply(songs, "missing").isEmpty())
+        val song = NavidromeClient.song(Json.parseToJsonElement("""{"id":"track","title":"Audio","suffix":"flac","bitRate":880,"samplingRate":44100,"bitDepth":16,"size":19866778,"created":"2026-01-01T00:00:00Z"}""").jsonObject)
+        assertEquals(song, NavidromeClient.song(NavidromeClient.describe(song)))
+    }
+
     @Test fun credentials() {
         for (case in cases("credentials.json")) {
             val name = case.str("name") ?: "?"

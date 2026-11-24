@@ -1,3 +1,4 @@
+import AVFoundation
 import CryptoKit
 import Foundation
 import UIKit
@@ -93,6 +94,43 @@ final class DownloadStore {
     func localURL(for songID: String) -> URL? {
         guard let item = items[songID], let directory else { return nil }
         return directory.appendingPathComponent(item.file)
+    }
+
+    // Старая копия остаётся доступной, пока новая не скачана и не проверена.
+    func repair(_ song: Song) async throws {
+        guard let client, let directory, active[song.id] == nil,
+              var request = Self.request(for: song, client: client, quality: UserDefaults.standard.string(forKey: Self.qualityKey).flatMap(StreamQuality.init) ?? Self.defaultQuality) else {
+            throw URLError(.cannotLoadFromNetwork)
+        }
+        let account = client.credentials.account
+        active[song.id] = .downloading(0)
+        defer { if self.client?.credentials.account == account { active[song.id] = nil } }
+        request.timeoutInterval = 300
+        let (temporary, response) = try await client.session.download(for: request)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw URLError(.badServerResponse) }
+        let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0, response.expectedContentLength <= 0 || response.expectedContentLength == Int64(size) else { throw URLError(.cannotDecodeContentData) }
+        let file = "\(UUID().uuidString).\(Self.fileExtension(for: response))"
+        let staged = Self.staging.appendingPathComponent(file)
+        try FileManager.default.moveItem(at: temporary, to: staged)
+        defer { try? FileManager.default.removeItem(at: staged) }
+        // AVFoundation не распознаёт некоторые корректные контейнеры с расширением .tmp.
+        let asset = AVURLAsset(url: staged)
+        guard !(try await asset.loadTracks(withMediaType: .audio)).isEmpty else { throw URLError(.cannotDecodeContentData) }
+        try Task.checkCancellation()
+        guard self.client?.credentials.account == account, active[song.id] != nil else { throw CancellationError() }
+        let old = items[song.id]
+        let limit = UserDefaults.standard.double(forKey: Self.limitKey)
+        guard limit <= 0 || totalSize - (old?.size ?? 0) + size <= Int(limit * 1_073_741_824) else { throw URLError(.dataLengthExceedsMaximum) }
+        let destination = directory.appendingPathComponent(file)
+        try FileManager.default.moveItem(at: staged, to: destination)
+        var updated = items
+        updated[song.id] = Item(song: song, file: file, size: size, date: Date(), automatic: false)
+        do { try JSONEncoder().encode(updated).write(to: directory.appendingPathComponent("index.json"), options: .atomic) }
+        catch { try? FileManager.default.removeItem(at: destination); throw error }
+        items = updated
+        if let old { try? FileManager.default.removeItem(at: directory.appendingPathComponent(old.file)) }
     }
 
     func isDownloaded(_ song: Song) -> Bool { items[song.id] != nil }

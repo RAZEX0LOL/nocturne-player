@@ -246,6 +246,9 @@ class NavidromeClient(
             o["track"]?.jsonPrimitive?.intOrNull, o.optional("starred") != null,
             o["userRating"]?.jsonPrimitive?.intOrNull, replayGain(o["replayGain"] as? JsonObject),
             albumId = o.optional("albumId"),
+            suffix = o.optional("suffix"), bitRate = o["bitRate"]?.jsonPrimitive?.intOrNull,
+            samplingRate = o["samplingRate"]?.jsonPrimitive?.intOrNull, bitDepth = o["bitDepth"]?.jsonPrimitive?.intOrNull,
+            size = o["size"]?.jsonPrimitive?.longOrNull, created = o.optional("created"),
         )
 
         /** Обратная операция к [song]: в таком виде трек ложится на диск и читается обратно. */
@@ -259,6 +262,9 @@ class NavidromeClient(
             song.track?.let { put("track", it) }
             if (song.starred) put("starred", true)
             song.albumId?.let { put("albumId", it) }
+            song.suffix?.let { put("suffix", it) }; song.bitRate?.let { put("bitRate", it) }
+            song.samplingRate?.let { put("samplingRate", it) }; song.bitDepth?.let { put("bitDepth", it) }
+            song.size?.let { put("size", it) }; song.created?.let { put("created", it) }
         }
 
         private fun replayGain(o: JsonObject?) = o?.let {

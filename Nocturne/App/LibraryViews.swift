@@ -586,7 +586,17 @@ struct AlbumDetailView: View {
     @State private var addToPlaylist = false
     @State private var notes: String?
     @State private var notesExpanded = false
+    @FocusState private var filterFocused: Bool
+    @State private var query = ""
+    @State private var order = SongOrder.original
+    @State private var selecting = false
+    @State private var selected = Set<String>()
+    @State private var addSelection = false
+    @State private var reveal = 0
     var body: some View {
+        let visible = order.apply(songs, query: query)
+        let chosen = visible.filter { selected.contains($0.id) }
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(spacing: 24) {
                 #if targetEnvironment(macCatalyst)
@@ -597,7 +607,7 @@ struct AlbumDetailView: View {
                         Text(album.artist ?? String(localized: "Неизвестный исполнитель")).foregroundStyle(Theme.accent)
                         Text([album.year.map(String.init), album.songCount.map { String(localized: "Треков: \($0)") }].compactMap { $0 }.joined(separator: " · "))
                             .font(.subheadline).foregroundStyle(Theme.secondary)
-                        PlayButtons(songs: songs).frame(maxWidth: 380).padding(.top, 8)
+                        PlayButtons(songs: visible).frame(maxWidth: 380).padding(.top, 8)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 12)
                 #else
@@ -608,7 +618,7 @@ struct AlbumDetailView: View {
                     Text([album.year.map(String.init), album.songCount.map { String(localized: "Треков: \($0)") }].compactMap { $0 }.joined(separator: " · "))
                         .font(.caption).foregroundStyle(Theme.secondary)
                 }
-                PlayButtons(songs: songs)
+                PlayButtons(songs: visible)
                 #endif
                 if let notes, !notes.isEmpty {
                     Text(notes).font(.callout).foregroundStyle(Theme.secondary).lineLimit(notesExpanded ? nil : 3)
@@ -621,16 +631,57 @@ struct AlbumDetailView: View {
                     Text(error).foregroundStyle(Theme.secondary)
                     Button(String(localized: "Повторить")) { Task { await load() } }
                 }
-                #if targetEnvironment(macCatalyst)
-                MacSongTable(songs: songs) { index in player.play(songs, at: index, client: library.client) }
-                #else
-                LazyVStack(spacing: 12) {
-                    ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
-                        SongRow(song: song) { player.play(songs, at: index, client: library.client) }
+                VStack(spacing: 12) {
+                    TextField(String(localized: "Поиск в списке"), text: $query).textFieldStyle(.roundedBorder).accessibilityIdentifier("album.filter").focused($filterFocused).submitLabel(.done).onSubmit { filterFocused = false }
+                    HStack {
+                        Picker(String(localized: "Порядок треков"), selection: $order) {
+                            ForEach(SongOrder.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.pickerStyle(.menu)
+                        Spacer()
+                        Button(String(localized: "Текущий трек")) { query = ""; reveal += 1 }
+                            .disabled(!songs.contains { $0.id == player.current?.id })
+                    }
+                    HStack {
+                        Text("\(visible.count) / \(songs.count)").font(.caption).foregroundStyle(Theme.secondary)
+                        Spacer()
+                        Button(selecting ? String(localized: "Готово") : String(localized: "Выбрать")) { selecting.toggle(); selected = [] }
+                    }
+                    if selecting {
+                        HStack {
+                            Button(String(localized: "Выбрать все")) { selected = Set(visible.map(\.id)) }
+                            Menu {
+                                SongActions(songs: chosen, addToPlaylist: $addSelection)
+                            } label: { Text(String(localized: "Выбрано: \(chosen.count)")) }.disabled(chosen.isEmpty)
+                            Spacer()
+                        }.buttonStyle(.bordered).controlSize(.small)
                     }
                 }
+                #if targetEnvironment(macCatalyst)
+                MacSongTable(songs: visible, selection: selecting ? $selected : nil) { index in player.play(visible, at: index, client: library.client) }
+                #else
+                LazyVStack(spacing: 12) {
+                    ForEach(Array(visible.enumerated()), id: \.offset) { index, song in
+                        HStack {
+                            if selecting {
+                                Button {
+                                    if selected.contains(song.id) { selected.remove(song.id) } else { selected.insert(song.id) }
+                                } label: { Image(systemName: selected.contains(song.id) ? "checkmark.circle.fill" : "circle").frame(width: 36, height: 44) }
+                                    .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                                    .accessibilityLabel(String(localized: "Выбрать") + " " + song.title)
+                                    .accessibilityIdentifier("album.selection." + song.id)
+                            }
+                            SongRow(song: song) { player.play(visible, at: index, client: library.client) }
+                        }.id(song.id)
+                    }
+                }.id(selecting)
                 #endif
             }.padding(24)
+        }
+        .task(id: reveal) {
+            guard reveal > 0, let id = player.current?.id else { return }
+            await Task.yield()
+            withAnimation { proxy.scrollTo(id, anchor: .center) }
+        }
         }.background(Theme.background).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -651,6 +702,7 @@ struct AlbumDetailView: View {
                 }
             }
             .sheet(isPresented: $addToPlaylist) { PlaylistPicker(songs: songs) }
+            .sheet(isPresented: $addSelection) { PlaylistPicker(songs: chosen) }
             .task { starred = album.starred != nil; await load() }
     }
     private func load() async {

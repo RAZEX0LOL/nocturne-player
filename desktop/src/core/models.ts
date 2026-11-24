@@ -18,6 +18,12 @@ export interface Song {
   coverArt?: string
   /** Секунды, дробные: сервер отдаёт длительность с долями. */
   duration?: number
+  suffix?: string
+  bitRate?: number
+  samplingRate?: number
+  bitDepth?: number
+  size?: number
+  created?: string
   track?: number
   starred?: string
   userRating?: number

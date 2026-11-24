@@ -272,10 +272,12 @@ type Catalog = Pick<State, 'recent' | 'shelves' | 'albums' | 'artists' | 'playli
 class Store {
   private epoch = new SessionEpoch()
   private connectAttempt = 0
+  private currentSource?: { entryId: string; source: string }
   private loadAttempt = 0
   private listening?: ListeningSession
   private flushing = false
   private runningDownloads = false
+  private repairingDownload?: string
   private diskDownloads: platform.DownloadedTrack[] = []
   private viewListeners = new Set<() => void>()
   private transportListeners = new Set<() => void>()
@@ -1100,6 +1102,7 @@ class Store {
           album: track.album,
           track: track.track,
           duration: track.duration,
+          suffix: track.path.split('.').pop()?.toLowerCase(), size: track.size,
           coverArt: track.cover ? `file:${track.cover}` : undefined,
         }))
         .sort(byAlbumThenTrack)
@@ -1238,7 +1241,59 @@ class Store {
     await this.download(wanted, true)
   }
 
+  async repairTrack(song: Song) {
+    const client = this.state.client
+    if (!client || !this.online || isLocalId(song.id) || this.runningDownloads || !platform.isDesktop()) {
+      return this.showNotice(t('Для восстановления нужна сеть и свободная очередь загрузок.'))
+    }
+    const valid = this.epoch.capture()
+    const attempt = this.loadAttempt
+    const entry = this.state.queue?.current?.id
+    this.runningDownloads = true
+    this.repairingDownload = song.id
+    this.patch({ downloading: { ...this.state.downloading, [song.id]: true } })
+    try {
+      const size = this.diskDownloads.filter((item) => item.id !== song.id).reduce((sum, item) => sum + (item.size ?? 0), 0)
+      const available = this.state.settings.downloadLimitMB > 0 ? this.state.settings.downloadLimitMB * 1024 * 1024 - size : undefined
+      if (available !== undefined && available <= 0) throw new Error('limit')
+      const url = await client.stream(song.id, this.state.settings.quality)
+      const cover = song.coverArt ? await client.cover(song.coverArt, 600) : undefined
+      await platform.downloadTrack(url, song, client.credentials.account, cover, false, available)
+      if (!valid()) return
+      await this.loadOnDisk()
+      if (entry && this.state.queue?.current?.id === entry && this.state.queue.current.song.id === song.id && attempt === this.loadAttempt) {
+        const playing = this.state.playing
+        this.engine.forget(song.id)
+        await this.startCurrent(playing)
+      }
+      this.showNotice(t('Загрузка обновлена'))
+    } catch {
+      if (valid()) this.patch({ error: t('Не удалось обновить загрузку. Старая копия сохранена.') })
+    } finally {
+      this.repairingDownload = undefined
+      this.runningDownloads = false
+      if (valid()) {
+        const { [song.id]: _removed, ...downloading } = this.state.downloading
+        this.patch({ downloading })
+      }
+      void this.processDownloads()
+    }
+  }
+
+  trackDiagnostics(song: Song) {
+    const current = this.state.queue?.current?.song.id === song.id
+    return {
+      app: 'Nocturne Player', platform: 'Desktop', title: song.title,
+      source: current && this.currentSource?.entryId === this.state.queue?.current?.id ? this.currentSource?.source : this.sourceOf(song.id), originalFormat: song.suffix,
+      catalogDurationSeconds: song.duration,
+      playerDurationSeconds: current ? this.state.duration : undefined,
+      positionSeconds: current ? this.state.position : undefined,
+      playing: current ? this.state.playing : undefined,
+    }
+  }
+
   async removeDownload(song: Song) {
+    if (this.repairingDownload === song.id) return
     this.engine.forget(song.id)
     try {
       const account = this.state.client?.credentials.account
@@ -1351,6 +1406,7 @@ class Store {
     if (!song) return
     const current = this.epoch.capture()
     const attempt = ++this.loadAttempt
+    const source = this.sourceOf(song.id)
     const url = await this.sourceUrl(song)
     if (!current() || attempt !== this.loadAttempt || this.state.queue !== queue) return
     if (!url) {
@@ -1360,6 +1416,7 @@ class Store {
     this.startedAt = restoredListening?.startedAt ?? Date.now()
     this.scrobbled = restoredListening?.submitted ?? false
     this.listening = restoredListening ?? { account: this.queueOwner ?? 'on-device', songId: song.id, playId: crypto.randomUUID(), startedAt: this.startedAt, submitted: false }
+    this.currentSource = { entryId: queue!.current!.id, source }
     await this.engine.load(url, song, this.replayGainFor(queue!.position), autoplay)
     if (!current() || this.state.queue !== queue) return
     if (from > 0) this.engine.seek(from)

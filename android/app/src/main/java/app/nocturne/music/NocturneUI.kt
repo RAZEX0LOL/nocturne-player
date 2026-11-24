@@ -58,6 +58,7 @@ import coil.request.ImageRequest
 import java.io.File
 import kotlin.math.sin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** Цвета темы: фон, карточки, приглушённый текст и основной текст («чернила»). */
 internal data class Palette(val background: Color, val surface: Color, val muted: Color, val ink: Color, val dark: Boolean)
@@ -498,17 +499,39 @@ private fun androidx.compose.foundation.lazy.LazyListScope.downloadsSection(vm: 
 }
 
 @Composable private fun DetailScreen(vm: MusicViewModel, detail: Detail) {
-    LazyColumn(contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    var query by rememberSaveable(detail.title) { mutableStateOf("") }
+    var order by remember(detail.title) { mutableStateOf(SongOrder.original) }
+    var sorting by remember { mutableStateOf(false) }
+    var selecting by remember(detail.title) { mutableStateOf(false) }
+    var selected by remember(detail.title) { mutableStateOf(setOf<String>()) }
+    var playlistPicker by remember { mutableStateOf(false) }
+    val songs = remember(detail.songs, query, order) { order.apply(detail.songs, query) }
+    val chosen = songs.filter { it.id in selected }
+    val scroll = rememberLazyListState()
+    var reveal by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reveal, songs) {
+        if (reveal > 0) {
+            val index = songs.indexOfFirst { it.id == vm.playback.current?.id }
+            if (index >= 0) scroll.animateScrollToItem(2 + detail.albums.size + (if (detail.loading) 1 else 0) + index)
+            reveal = 0
+        }
+    }
+    if (playlistPicker) AlertDialog(onDismissRequest = { playlistPicker = false }, title = { Text(tr("Добавить в плейлист")) }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            vm.playlists.forEach { playlist -> TextButton(onClick = { vm.addToPlaylist(playlist, chosen); playlistPicker = false }) { Text(playlist.name) } }
+        }
+    }, confirmButton = { TextButton(onClick = { playlistPicker = false }) { Text(tr("Готово")) } })
+    LazyColumn(state = scroll, modifier = Modifier.testTag("detail_list"), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 Cover(detail.cover, vm.client, Modifier.size(250.dp))
                 Text(detail.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 if (detail.songs.isNotEmpty()) {
-                    Button(onClick = { vm.play(detail.songs) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Button(onClick = { vm.play(songs) }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                         Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(8.dp)); Text(tr("Слушать"))
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { vm.play(detail.songs, 0, shuffle = true) }) { Text(tr("Перемешать")) }
+                        OutlinedButton(onClick = { vm.play(songs, 0, shuffle = true) }) { Text(tr("Перемешать")) }
                         val missing = detail.songs.filterNot(vm::isDownloaded)
                         if (vm.client != null && !vm.offline) OutlinedButton(
                             onClick = { vm.download(detail.songs) },
@@ -523,13 +546,47 @@ private fun androidx.compose.foundation.lazy.LazyListScope.downloadsSection(vm: 
         }
         if (detail.loading) item { Loading() }
         items(detail.albums, key = { it.id }) { AlbumRow(it, vm) }
-        itemsIndexed(detail.songs) { index, song -> SongRow(song, vm) { vm.play(detail.songs, index) } }
+        if (detail.songs.isNotEmpty()) item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(query, { query = it }, label = { Text(tr("Поиск в списке")) }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("album_filter"))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box {
+                        TextButton(onClick = { sorting = true }) { Text(tr(order.label)) }
+                        DropdownMenu(expanded = sorting, onDismissRequest = { sorting = false }) {
+                            SongOrder.entries.forEach { value -> DropdownMenuItem(text = { Text(tr(value.label)) }, onClick = { order = value; sorting = false }) }
+                        }
+                    }
+                    TextButton(onClick = { query = ""; reveal++ }, enabled = detail.songs.any { it.id == vm.playback.current?.id }) { Text(tr("Текущий трек")) }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${songs.size} / ${detail.songs.size}", color = Muted, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { selecting = !selecting; selected = emptySet() }) { Text(tr(if (selecting) "Готово" else "Выбрать")) }
+                    if (selecting) TextButton(onClick = { selected = songs.map { it.id }.toSet() }) { Text(tr("Выбрать все")) }
+                }
+                if (selecting) {
+                    Text(tr("Выбрано: {n}", "n" to chosen.size), color = Muted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { vm.appendToQueue(chosen) }, enabled = chosen.isNotEmpty()) { Text(tr("В очередь")) }
+                        OutlinedButton(onClick = { vm.download(chosen) }, enabled = chosen.isNotEmpty() && vm.client != null && !vm.offline) { Text(tr("Скачать")) }
+                    }
+                    OutlinedButton(onClick = { playlistPicker = true }, enabled = chosen.isNotEmpty() && vm.playlists.isNotEmpty() && !vm.offline) { Text(tr("Добавить в плейлист")) }
+                }
+            }
+        }
+        itemsIndexed(songs) { index, song ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (selecting) Checkbox(checked = song.id in selected, onCheckedChange = { selected = if (it) selected + song.id else selected - song.id })
+                Box(Modifier.weight(1f)) { SongRow(song, vm) { vm.play(songs, index) } }
+            }
+        }
         if (!detail.loading && detail.albums.isEmpty() && detail.songs.isEmpty()) item { EmptyState(tr("Пока пусто"), tr("Здесь появится твоя музыка.")) }
     }
 }
 
 @Composable private fun SongRow(song: Song, vm: MusicViewModel, action: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
+    var information by remember { mutableStateOf(false) }
+    if (information) SongInformationDialog(song, vm) { information = false }
     val playable = vm.isPlayable(song)
     val accent = MaterialTheme.colorScheme.primary
     Row(
@@ -547,9 +604,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.downloadsSection(vm: 
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, tr("Действия с треком"), tint = Muted) }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text(tr("Информация о треке")) }, onClick = { menu = false; information = true })
+                if (!isLocalId(song.id) && !song.id.startsWith("radio:") && vm.client != null && !vm.offline) {
+                    DropdownMenuItem(text = { Text(tr("Перескачать и перезапустить")) }, enabled = vm.repairingSongID == null, onClick = { menu = false; vm.repairTrack(song) })
+                }
                 DropdownMenuItem(text = { Text(tr("Сыграть следующим")) }, onClick = { menu = false; vm.playNext(listOf(song)) })
                 DropdownMenuItem(text = { Text(tr("В конец очереди")) }, onClick = { menu = false; vm.appendToQueue(listOf(song)) })
-                if (!isLocalId(song.id) && vm.client != null && !vm.offline) {
+                if (!isLocalId(song.id) && !song.id.startsWith("radio:") && vm.client != null && !vm.offline) {
                     DropdownMenuItem(text = { Text(tr("Микс по треку")) }, onClick = { menu = false; vm.playMix(song) })
                     DropdownMenuItem(text = { Text(tr("Поделиться")) }, onClick = { menu = false; vm.share(song) })
                     DropdownMenuItem(
@@ -559,7 +620,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.downloadsSection(vm: 
                     if (vm.isAutomatic(song)) DropdownMenuItem(text = { Text(tr("Сохранить для офлайна")) }, onClick = { menu = false; vm.download(listOf(song)) })
                     if (!vm.isDownloaded(song)) DropdownMenuItem(text = { Text(tr("Скачать")) }, onClick = { menu = false; vm.download(listOf(song)) })
                 }
-                if (vm.isDownloaded(song)) DropdownMenuItem(text = { Text(tr("Удалить загрузку")) }, onClick = { menu = false; vm.removeDownload(song) })
+                if (vm.isDownloaded(song)) DropdownMenuItem(text = { Text(tr("Удалить загрузку")) }, enabled = vm.repairingSongID != song.id, onClick = { menu = false; vm.removeDownload(song) })
                 if (isLocalId(song.id)) DropdownMenuItem(text = { Text(tr("Удалить с телефона")) }, onClick = { menu = false; vm.removeLocal(song) })
             }
         }
@@ -595,6 +656,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.downloadsSection(vm: 
 @Composable private fun PlayerScreen(vm: MusicViewModel, close: () -> Unit) {
     val state = vm.playback
     val song = state.current ?: return
+    var showInformation by remember { mutableStateOf(false) }
+    if (showInformation) SongInformationDialog(song, vm) { showInformation = false }
     var showQueue by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     var sleepMenu by remember { mutableStateOf(false) }
@@ -625,6 +688,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.downloadsSection(vm: 
                 if (vm.isStarred(song)) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                 tr("В избранное"), { vm.toggleStar(song) }, if (vm.isStarred(song)) accent else Ink,
             )
+            PlayerButton(Icons.Rounded.Info, tr("Информация о треке"), { showInformation = true })
             PlayerButton(Icons.AutoMirrored.Rounded.QueueMusic, tr("Очередь"), { showQueue = true })
         }
         Cover(song.coverArt, vm.client, Modifier.fillMaxWidth().aspectRatio(1f))
@@ -1022,4 +1086,32 @@ private fun coverSource(id: String?, client: NavidromeClient?, saved: Map<String
             }
         }
     }
+}
+
+@Composable private fun SongInformationDialog(song: Song, vm: MusicViewModel, close: () -> Unit) {
+    val context = LocalContext.current
+    var copied by remember { mutableStateOf(false) }
+    val source = when (vm.trackSource(song)) { SourceKind.local -> tr("Локальный файл"); SourceKind.download -> tr("Скачанная копия"); else -> tr("Сервер") }
+    val rows = listOf(
+        tr("Название") to song.title, tr("Исполнитель") to tr(song.artist), tr("Источник") to source,
+        tr("Длительность в каталоге") to (song.duration?.let { timeLabel((it * 1000).toLong()) } ?: "—"),
+        tr("Формат оригинала") to (song.suffix?.uppercase() ?: "—"),
+        tr("Битрейт оригинала") to (song.bitRate?.let { "$it kbps" } ?: "—"),
+        tr("Частота оригинала") to (song.samplingRate?.let { "$it Hz" } ?: "—"),
+        tr("Размер оригинала") to (song.size?.let { android.text.format.Formatter.formatFileSize(context, it) } ?: "—"),
+    ) + if (vm.playback.current?.id == song.id) listOf(tr("Длительность в плеере") to timeLabel(vm.playback.duration)) else emptyList()
+    AlertDialog(onDismissRequest = close, title = { Text(tr("Информация о треке")) }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            rows.forEach { (label, value) -> Column { Text(label, color = Muted, style = MaterialTheme.typography.labelMedium); Text(value) } }
+            if (!isLocalId(song.id) && !song.id.startsWith("radio:") && vm.client != null && !vm.offline) {
+                TextButton(onClick = { vm.repairTrack(song); close() }, enabled = vm.repairingSongID == null) { Text(tr("Перескачать и перезапустить")) }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = close) { Text(tr("Готово")) } }, dismissButton = {
+        TextButton(onClick = {
+            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Nocturne Player", vm.trackDiagnostics(song)))
+            copied = true
+        }) { Text(tr(if (copied) "Скопировано" else "Скопировать диагностику")) }
+    })
 }

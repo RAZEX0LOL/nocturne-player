@@ -5,6 +5,25 @@ final class PlaybackQueueTests: XCTestCase {
     private let songs = (0..<6).map { Song(id: "s\($0)", title: "Song \($0)") }
     private func ids(_ entries: some Sequence<PlaybackQueue.Entry>) -> [String] { entries.map(\.song.id) }
 
+    func testFilteredOrderPreservesPlaybackAndMissingDates() throws {
+        let songs = [
+            Song(id: "old", title: "Écho", duration: 100, created: "2026-01-01T00:00:00Z"),
+            Song(id: "new", title: "Echo remix", duration: 50, created: "2026-02-01T00:00:00.000Z"),
+            Song(id: "unknown", title: "Other")
+        ]
+        let shown = SongOrder.newest.apply(songs, query: " echo ")
+        XCTAssertEqual(shown.map(\.id), ["new", "old"])
+        XCTAssertEqual(PlaybackQueue(songs: shown, startAt: 1, shuffle: false).current?.song.id, "old")
+        XCTAssertEqual(SongOrder.newest.apply(songs, query: "").map(\.id), ["new", "old", "unknown"])
+        XCTAssertEqual(SongOrder.original.apply(songs, query: "missing"), [])
+        let encoded = Data(#"{"id":"track","title":"Audio","suffix":"flac","bitRate":880,"samplingRate":44100,"bitDepth":16,"size":19866778,"created":"2026-01-01T00:00:00Z"}"#.utf8)
+        let song = try JSONDecoder().decode(Song.self, from: encoded)
+        let restored = try JSONDecoder().decode(Song.self, from: JSONEncoder().encode(song))
+        XCTAssertEqual(restored.size, 19866778)
+        XCTAssertEqual(restored.samplingRate, 44100)
+        XCTAssertEqual(restored.suffix, "flac")
+    }
+
     func testLinearOrderAndEnd() {
         var queue = PlaybackQueue(songs: songs, startAt: 4, shuffle: false)
         XCTAssertEqual(queue.current?.song.id, "s4")

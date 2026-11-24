@@ -140,10 +140,11 @@ struct RootView: View {
             fullPlayer = true
         }
         #endif
+        .sheet(item: $player.informationSong) { SongInformationView(song: $0).appStores(library, player, downloads) }
         .sheet(isPresented: $settings) { SettingsView().appStores(library, player, downloads) }
         .addMusicPresenter()
         .sheet(isPresented: $fullPlayer) { PlayerView().presentationDragIndicator(.visible).appStores(library, player, downloads) }
-        .alert(String(localized: "Воспроизведение"), isPresented: Binding(get: { player.error != nil }, set: { if !$0 { player.error = nil } })) {
+        .alert(String(localized: "Воспроизведение"), isPresented: Binding(get: { player.error != nil && !fullPlayer && player.informationSong == nil }, set: { if !$0 { player.error = nil } })) {
             Button(String(localized: "Понятно")) { player.error = nil }
         } message: { Text(player.error ?? "") }
         .preferredColorScheme(Appearance.shared.colorScheme)

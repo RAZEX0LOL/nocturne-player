@@ -427,6 +427,39 @@ final class PlayerStore {
         remoteQueue = nil
     }
 
+    private(set) var repairingSongID: String?
+    var informationSong: Song?
+
+    func repair(_ song: Song) {
+        guard repairingSongID == nil, let client = LibraryStore.shared.client, !LocalLibrary.isLocal(song.id) else { return }
+        let account = client.credentials.account
+        let generation = playbackGeneration
+        repairingSongID = song.id
+        Task {
+            defer { repairingSongID = nil }
+            do {
+                try await DownloadStore.shared.repair(song)
+                guard LibraryStore.shared.client?.credentials.account == account else { return }
+                // Смена трека во время загрузки не должна возвращать человека назад.
+                if current?.id == song.id, playbackGeneration == generation {
+                    startCurrent(at: 0, autoplay: isPlaying)
+                }
+                show(String(localized: "Загрузка обновлена"))
+            } catch is CancellationError {} catch {
+                Log.player.error("Repair failed: \(Log.describe(error), privacy: .public)")
+                self.error = String(localized: "Не удалось обновить загрузку. Старая копия сохранена.")
+            }
+        }
+    }
+
+    func playbackSource(for song: Song) -> String {
+        if LocalLibrary.isLocal(song.id) { return String(localized: "Локальный файл") }
+        if current?.id == song.id, let url = (currentItem?.asset as? AVURLAsset)?.url {
+            return url.isFileURL ? String(localized: "Скачанная копия") : String(localized: "Сервер")
+        }
+        return DownloadStore.shared.isDownloaded(song) ? String(localized: "Скачанная копия") : String(localized: "Сервер")
+    }
+
     // MARK: - Items
 
     private func startCurrent(at time: Double, autoplay: Bool, isRetry: Bool = false, continueListening: Bool = false) {

@@ -21,6 +21,68 @@ class NavigationTest {
     }
     @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
 
+    @Test fun trackToolsWithMockServer() {
+        fun waitText(value: String, timeout: Long = 15_000) {
+            compose.waitUntil(timeout) { compose.onAllNodesWithText(value).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+        }
+        waitText(tr("Подключиться"))
+        compose.onNodeWithText(tr("Адрес сервера")).performTextInput("http://10.0.2.2:4533")
+        compose.onNodeWithText(tr("Логин")).performTextInput("test")
+        compose.onNodeWithText(tr("Пароль Navidrome")).performTextInput("demo")
+        compose.onNodeWithText(tr("Подключиться")).performClick()
+        waitText(tr("Недавно добавлено"))
+        compose.onNodeWithTag("tab_1").performClick()
+        compose.onNodeWithText(tr("Альбомы")).performClick()
+        waitText("Mock Album")
+        compose.onNodeWithText("Mock Album").performClick()
+        waitText(tr("Слушать"))
+        compose.onNodeWithTag("detail_list").performScrollToNode(hasTestTag("album_filter"))
+        compose.onNodeWithTag("album_filter").performTextInput("трек 3")
+        compose.runOnIdle {
+            compose.activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                .hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
+        compose.onNodeWithText(tr("Выбрать")).performScrollTo().performClick()
+        compose.onNodeWithText(tr("Выбрать все")).performScrollTo().performClick()
+        compose.onNodeWithText(tr("Выбрано: {n}", "n" to 1)).assertExists()
+        compose.onNodeWithTag("detail_list").performScrollToNode(isToggleable())
+        compose.onAllNodes(isToggleable()).onFirst().assertIsOn().performClick().assertIsOff()
+        compose.onNodeWithText(tr("Выбрано: {n}", "n" to 0)).assertExists()
+        compose.onNodeWithText(tr("Выбрать все")).performClick()
+        compose.onNodeWithText(tr("Выбрано: {n}", "n" to 1)).assertExists()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        fun screenshot(name: String) {
+            compose.waitForIdle()
+            instrumentation.waitForIdleSync()
+            val destination = File(instrumentation.targetContext.getExternalFilesDir(null), name)
+            destination.outputStream().use { instrumentation.uiAutomation.takeScreenshot().compress(Bitmap.CompressFormat.PNG, 100, it) }
+            instrumentation.uiAutomation.executeShellCommand("cp ${destination.absolutePath} /sdcard/Download/nocturne-$name").use { descriptor ->
+                java.io.FileInputStream(descriptor.fileDescriptor).use { it.readBytes() }
+            }
+        }
+        screenshot("track-tools-android.png")
+        compose.onNodeWithText(tr("Готово")).performScrollTo().performClick()
+        compose.onNodeWithText("Тестовый трек 3").performScrollTo().performClick()
+        compose.onAllNodesWithContentDescription(tr("Действия с треком")).onFirst().performClick()
+        compose.onNodeWithText(tr("Информация о треке")).performClick()
+        compose.onNodeWithText("WAV").assertExists()
+        compose.onNodeWithText(tr("Скопировать диагностику")).performClick()
+        compose.onNodeWithText(tr("Скопировано")).assertExists()
+        screenshot("track-information-android.png")
+        compose.onAllNodesWithText(tr("Готово")).onLast().performClick()
+        compose.onAllNodesWithContentDescription(tr("Действия с треком")).onFirst().performClick()
+        compose.onNodeWithText(tr("Перескачать и перезапустить")).performClick()
+        waitText(tr("Загрузка обновлена"), 25_000)
+        java.net.URL("http://10.0.2.2:4533/fail-next-stream?id=t2").readText()
+        compose.onAllNodesWithContentDescription(tr("Действия с треком")).onFirst().performClick()
+        compose.onNodeWithText(tr("Перескачать и перезапустить")).performClick()
+        waitText(tr("Не удалось обновить загрузку. Старая копия сохранена."))
+        compose.onNodeWithText(tr("Понятно")).performClick()
+        compose.onAllNodesWithContentDescription(tr("Действия с треком")).onFirst().performClick()
+        compose.onNodeWithText(tr("Информация о треке")).performClick()
+        compose.onNodeWithText(tr("Скачанная копия")).assertExists()
+    }
+
     @Test fun demoLibraryAlbumAndSearch() {
         compose.waitUntil(15_000) { compose.onAllNodesWithText(tr("Подключиться")).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
         compose.onNodeWithText(tr("Подключиться")).assertIsNotEnabled()

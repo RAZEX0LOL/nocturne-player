@@ -302,6 +302,10 @@ pub async fn download_track(
     if response.content_length().zip(limit_bytes).is_some_and(|(size, limit)| size > limit) {
         return Err("достигнут лимит места".into());
     }
+    let expected_size = response.content_length();
+    if content_type.starts_with("text/") || content_type.contains("json") {
+        return Err("сервер вернул не аудиофайл".into());
+    }
     let partial = folder.join(format!("{stem}.part"));
     let mut file = tokio::fs::File::create(&partial).await.map_err(|e| error("файл", e))?;
     let mut body = response.bytes_stream();
@@ -323,10 +327,31 @@ pub async fn download_track(
     file.flush().await.map_err(|e| error("запись", e))?;
     drop(file);
 
+    if size == 0 || expected_size.is_some_and(|expected| expected != size) {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err("получен неполный аудиофайл".into());
+    }
+    if Probe::open(&partial).and_then(|probe| Ok(probe.guess_file_type()?)).and_then(|probe| probe.read())
+        .map(|audio| audio.properties().duration().is_zero()).unwrap_or(true) {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err("не удалось прочитать аудиофайл".into());
+    }
     let target = folder.join(format!("{stem}.{}", extension_for(&content_type)));
-    tokio::fs::rename(&partial, &target).await.map_err(|e| error("файл", e))?;
     let meta = serde_json::to_vec(&song).map_err(|e| error("метаданные", e))?;
-    tokio::fs::write(folder.join(format!("{stem}.json")), meta).await.map_err(|e| error("метаданные", e))?;
+    let meta_partial = folder.join(format!("{stem}.json.part"));
+    tokio::fs::write(&meta_partial, meta).await.map_err(|e| error("метаданные", e))?;
+    tokio::fs::rename(&meta_partial, folder.join(format!("{stem}.json"))).await.map_err(|e| error("метаданные", e))?;
+    tokio::fs::rename(&partial, &target).await.map_err(|e| error("файл", e))?;
+    // После смены формата старая копия не должна случайно выбираться при сканировании.
+    if let Ok(mut entries) = tokio::fs::read_dir(&folder).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path != target && path.file_stem().is_some_and(|value| value == stem.as_str())
+                && path.extension().is_some_and(|value| value != "json" && value != "part" && value != "cover") {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+        }
+    }
     // Обложку кладём рядом: без сети серверный адрес не откроется, а файл — откроется.
     let cover = match cover_url {
         Some(address) => save_cover(&folder.join(format!("{stem}.cover")), &address).await,

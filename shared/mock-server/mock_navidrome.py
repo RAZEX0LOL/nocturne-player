@@ -24,7 +24,7 @@ def png(r, g, b, size=64):
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
 
 SONGS = [{"id": f"t{i}", "title": f"Тестовый трек {i + 1}", "artist": "Mock Artist", "album": "Mock Album",
-          "albumId": "al-1", "artistId": "ar-1", "coverArt": "al-1", "duration": TRACK_SECONDS, "track": i + 1} for i in range(3)]
+          "albumId": "al-1", "artistId": "ar-1", "coverArt": "al-1", "duration": TRACK_SECONDS, "track": i + 1, "suffix": "wav", "bitRate": 352, "samplingRate": 22050, "size": int(TRACK_SECONDS * 44100 + 44), "created": f"2026-11-{20 + i:02d}T00:00:00Z"} for i in range(3)]
 AUDIO = {s["id"]: wav(330 + 110 * i) for i, s in enumerate(SONGS)}
 # Трек не из альбома: его отдаёт только «похожее» — проверка бесконечного воспроизведения.
 SIMILAR = {"id": "s9", "title": "Похожий трек", "artist": "Another Artist", "album": "Elsewhere", "albumId": "al-9",
@@ -114,6 +114,9 @@ class Handler(BaseHTTPRequestHandler):
             data = next(iter(AUDIO.values()))
             self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(data)))
             self.end_headers(); self.wfile.write(data); return
+        if url.path == "/fail-next-stream":
+            FAIL_STREAMS.add(q.get("id", "t2"))
+            return self.reply(b"ok", "text/plain")
         # Подпись проверяется по-настоящему: иначе ошибку в алгоритме заметит только живой Navidrome.
         if not self.signed(q):
             print(time.strftime("%H:%M:%S"), endpoint, "неверная подпись", flush=True)

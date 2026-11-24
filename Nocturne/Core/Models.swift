@@ -20,6 +20,12 @@ struct Song: Codable, Identifiable, Hashable, Sendable {
     var albumId: String?
     var coverArt: String?
     var duration: Double?
+    var suffix: String?
+    var bitRate: Int?
+    var samplingRate: Int?
+    var bitDepth: Int?
+    var size: Int64?
+    var created: String?
     var track: Int?
     var starred: String?
     var userRating: Int?
@@ -180,5 +186,44 @@ enum DemoLibrary {
             Song(id: "\(album.id)-\($0.offset)", title: $0.element, artist: album.artist,
                  album: album.name, coverArt: album.coverArt, duration: 24, track: $0.offset + 1)
         }
+    }
+}
+
+enum SongOrder: String, CaseIterable {
+    case original, title, artist, duration, newest
+    var title: String {
+        switch self {
+        case .original: String(localized: "Порядок альбома")
+        case .title: String(localized: "По названию")
+        case .artist: String(localized: "По исполнителю")
+        case .duration: String(localized: "По длительности")
+        case .newest: String(localized: "Сначала новые")
+        }
+    }
+    func apply(_ songs: [Song], query: String) -> [Song] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rows = songs.enumerated().filter { _, song in
+            text.isEmpty || [song.title, song.artist ?? "", song.album ?? ""].joined(separator: " ").range(of: text, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+        return rows.sorted { a, b in
+            let order: ComparisonResult
+            switch self {
+            case .original: return a.offset < b.offset
+            case .title: order = a.element.title.localizedStandardCompare(b.element.title)
+            case .artist: order = (a.element.artist ?? "").localizedStandardCompare(b.element.artist ?? "")
+            case .duration:
+                let left = a.element.duration ?? 0, right = b.element.duration ?? 0
+                return left == right ? a.offset < b.offset : left < right
+            case .newest:
+                let left = Self.date(a.element.created), right = Self.date(b.element.created)
+                return left == right ? a.offset < b.offset : left > right
+            }
+            return order == .orderedSame ? a.offset < b.offset : order == .orderedAscending
+        }.map(\.element)
+    }
+    private static func date(_ value: String?) -> Date {
+        guard let value else { return .distantPast }
+        return (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+            ?? (try? Date.ISO8601FormatStyle().parse(value)) ?? .distantPast
     }
 }

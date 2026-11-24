@@ -544,11 +544,55 @@ internal class MusicViewModel(application: Application) : AndroidViewModel(appli
     }
 
     fun removeDownload(song: Song) {
+        if (repairingSongID == song.id) return
         viewModelScope.launch {
             downloads.remove(song)
             downloaded = runCatching { downloads.load() }.getOrDefault(downloaded)
             coverFiles = downloads.coverFiles()
         }
+    }
+
+    var repairingSongID: String? by mutableStateOf(null); private set
+
+    fun repairTrack(song: Song) {
+        val api = client ?: return
+        if (repairingSongID != null || offline || isLocalId(song.id)) return
+        val prepared = queue
+        val entry = prepared?.current?.id
+        repairingSongID = song.id
+        viewModelScope.launch {
+            try {
+                downloads.repair(api, song, settings, settings.quality(onWifi))
+                if (client !== api) return@launch
+                downloaded = downloads.load(); coverFiles = downloads.coverFiles()
+                if (prepared != null && queue === prepared && prepared.current?.id == entry && playback.current?.id == song.id) {
+                    val playing = controller?.playWhenReady == true
+                    pushQueue(prepared, play = playing)
+                    if (!playing) controller?.pause()
+                }
+                notice = tr("Загрузка обновлена")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (client === api) error = tr("Не удалось обновить загрузку. Старая копия сохранена.") }
+            finally { repairingSongID = null }
+        }
+    }
+
+    fun trackSource(song: Song): SourceKind {
+        val uri = if (playback.current?.id == song.id) controller?.currentMediaItem?.localConfiguration?.uri else null
+        if (uri != null) return if (uri.scheme == "file" || uri.scheme == "content") {
+            if (isLocalId(song.id)) SourceKind.local else SourceKind.download
+        } else SourceKind.stream
+        return sourceOf(song)
+    }
+
+    fun trackDiagnostics(song: Song): String {
+        val current = playback.current?.id == song.id
+        return org.json.JSONObject().apply {
+            put("app", "Nocturne Player"); put("platform", "Android"); put("version", BuildConfig.VERSION_NAME)
+            put("title", song.title); put("source", trackSource(song).name)
+            song.duration?.let { put("catalogDurationSeconds", it) }; song.suffix?.let { put("originalFormat", it) }
+            if (current) { put("playerDurationSeconds", playback.duration / 1000.0); put("positionSeconds", playback.position / 1000.0); put("playing", playback.playing) }
+        }.toString(2)
     }
 
     fun isAutomatic(song: Song) = downloads.isAutomatic(song.id)

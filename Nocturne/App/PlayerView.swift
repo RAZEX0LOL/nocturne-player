@@ -165,7 +165,7 @@ struct PlayerView: View {
     @Environment(DownloadStore.self) private var downloads
     @Environment(\.dismiss) private var dismiss
     /// One sheet at a time: Mac Catalyst drops input when several .sheet modifiers sit on one view.
-    enum Modal: String, Identifiable { case queue, lyrics, playlist; var id: String { rawValue } }
+    enum Modal: String, Identifiable { case queue, lyrics, playlist, information; var id: String { rawValue } }
     @State private var modal: Modal?
     @State private var scrubbing = false
     @State private var position: Double = 0
@@ -220,8 +220,10 @@ struct PlayerView: View {
                             Text(player.current?.album ?? String(localized: "Твоя музыка")).font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
                         }
                         Spacer()
+                        Button { modal = .information } label: { Image(systemName: "info.circle").frame(width: 44, height: 44) }
+                            .accessibilityLabel(String(localized: "Информация о треке")).accessibilityIdentifier("player.information")
                         Menu {
-                            if let song = player.current { SongActions(songs: [song], addToPlaylist: Binding(get: { modal == .playlist }, set: { modal = $0 ? .playlist : nil })) }
+                            if let song = player.current { SongActions(songs: [song], showInformation: { _ in modal = .information }, addToPlaylist: Binding(get: { modal == .playlist }, set: { modal = $0 ? .playlist : nil })) }
                         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
                             .accessibilityLabel(String(localized: "Действия с треком")).disabled(library.client == nil)
                     }
@@ -350,9 +352,13 @@ struct PlayerView: View {
                     case .queue: QueueView(onClose: close)
                     case .lyrics: LyricsView(onClose: close)
                     case .playlist: if let song = player.current { PlaylistPicker(songs: [song], onClose: close) }
+                    case .information: if let song = player.current { SongInformationView(song: song, onClose: close) }
                     }
                 }.appStores(library, player, downloads)
             }
+            .alert(String(localized: "Воспроизведение"), isPresented: Binding(get: { player.error != nil && modal == nil }, set: { if !$0 { player.error = nil } })) {
+                Button(String(localized: "Понятно")) { player.error = nil }
+            } message: { Text(player.error ?? "") }
             .overlay(alignment: .top) { if let notice = player.notice { Toast(text: notice).padding(.top, 8) } }
             .animation(.spring(duration: 0.3), value: player.notice)
     }

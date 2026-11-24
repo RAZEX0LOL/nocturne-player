@@ -195,11 +195,11 @@ final class LocalLibrary {
         }
         let folder = url.deletingLastPathComponent().lastPathComponent
         if let artwork { try? artwork.write(to: artworkURL(for: id), options: .atomic) }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let song = Song(id: id, title: title?.nilIfBlank ?? fileName, artist: artist?.nilIfBlank,
                         album: album?.nilIfBlank ?? (folder == musicFolder.lastPathComponent ? nil : folder),
                         coverArt: artwork == nil ? nil : id,
-                        duration: seconds.flatMap { $0.isFinite ? $0 : nil }, track: trackNumber)
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                        duration: seconds.flatMap { $0.isFinite ? $0 : nil }, suffix: url.pathExtension.lowercased(), size: Int64(size), track: trackNumber)
         return Track(path: path, song: song, added: Date(), size: size)
     }
 }

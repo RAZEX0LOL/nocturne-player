@@ -49,7 +49,7 @@ class DownloadStore private constructor(private val context: Context) {
         val found = mutableMapOf<String, String>()
         val songs = root.listFiles().orEmpty().filter { it.isFile && it.extension == "json" }.mapNotNull { meta ->
             val song = runCatching { NavidromeClient.song(Json.parseToJsonElement(meta.readText()).jsonObject) }.getOrNull() ?: return@mapNotNull null
-            val audio = root.listFiles().orEmpty().firstOrNull { it.isFile && it.nameWithoutExtension == meta.nameWithoutExtension && it.extension !in setOf("json", "part", "cover", "bak") } ?: return@mapNotNull null
+            val audio = root.listFiles().orEmpty().firstOrNull { it.isFile && it.nameWithoutExtension == meta.nameWithoutExtension && it.extension !in setOf("json", "part", "repair-part", "cover", "bak") } ?: return@mapNotNull null
             val id = "local:legacy:${accountHash(audio.absolutePath)}"
             found[id] = audio.absolutePath
             val cover = File(root, "${meta.nameWithoutExtension}.cover")
@@ -73,7 +73,7 @@ class DownloadStore private constructor(private val context: Context) {
         val songs = folder.listFiles().orEmpty().filter { it.extension == "json" && it.name != "queue.json" }.mapNotNull { meta ->
             val raw = runCatching { Json.parseToJsonElement(meta.readText()).jsonObject }.getOrNull() ?: return@mapNotNull null
             val song = runCatching { NavidromeClient.song(raw) }.getOrNull() ?: return@mapNotNull null
-            val audio = folder.listFiles().orEmpty().firstOrNull { it.nameWithoutExtension == meta.nameWithoutExtension && it.extension !in setOf("json", "cover", "part", "bak") } ?: return@mapNotNull null
+            val audio = folder.listFiles().orEmpty().firstOrNull { it.nameWithoutExtension == meta.nameWithoutExtension && it.extension !in setOf("json", "cover", "part", "repair-part", "bak") } ?: return@mapNotNull null
             found[song.id] = audio.absolutePath
             if (raw["_automatic"]?.jsonPrimitive?.booleanOrNull == true) automatic += song.id
             val cover = File(folder, "${meta.nameWithoutExtension}.cover")
@@ -125,6 +125,51 @@ class DownloadStore private constructor(private val context: Context) {
         synchronized(this@DownloadStore) { saveJobs(owner, jobs(owner).filterNot { it.song.id == song.id }) }
         removeFiles(folder(owner), accountHash(song.id))
         if (account == owner) { paths = paths - song.id; changed() }
+    }
+
+    suspend fun repair(api: NavidromeClient, song: Song, settings: Settings, quality: StreamQuality) = withContext(Dispatchers.IO) {
+        worker.withLock {
+            val owner = api.credentials.account
+            check(account == owner && allowedNetwork(settings, false))
+            check(jobs(owner).none { it.song.id == song.id })
+            val folder = folder(owner)
+            val stem = accountHash(song.id)
+            val partial = File(folder, "$stem.repair-part")
+            try {
+                http.newCall(Request.Builder().url(api.stream(song.id, quality)).build()).execute().use { response ->
+                    check(response.isSuccessful)
+                    val mime = response.header("Content-Type").orEmpty()
+                    check(!mime.startsWith("text/") && !mime.contains("json"))
+                    val body = checkNotNull(response.body)
+                    val oldSize = paths[song.id]?.let { File(it).length() } ?: 0L
+                    val otherSize = folder.listFiles().orEmpty().sumOf { it.length() } - oldSize
+                    val available = if (settings.downloadLimitMB > 0) settings.downloadLimitMB.toLong() * 1024 * 1024 - otherSize else Long.MAX_VALUE
+                    var copied = 0L
+                    partial.outputStream().use { output -> body.byteStream().use { input ->
+                        val buffer = ByteArray(65536)
+                        while (true) {
+                            currentCoroutineContext().ensureActive()
+                            check(account == owner && allowedNetwork(settings, false))
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            copied += count; check(copied <= available)
+                            output.write(buffer, 0, count)
+                        }
+                    } }
+                    check(copied > 0 && (body.contentLength() < 0 || copied == body.contentLength()))
+                    android.media.MediaMetadataRetriever().use { reader ->
+                        reader.setDataSource(partial.absolutePath)
+                        check((reader.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0) > 0)
+                    }
+                    check(account == owner)
+                    val target = File(folder, "$stem.${extensionFor(mime)}")
+                    atomic(File(folder, "$stem.json"), NavidromeClient.describe(song).toString())
+                    check(partial.renameTo(target))
+                    folder.listFiles().orEmpty().filter { it.nameWithoutExtension == stem && it != target && it.extension !in setOf("json", "cover", "bak") }.forEach { it.delete() }
+                }
+                load(); changed()
+            } finally { partial.delete() }
+        }
     }
 
     fun allowedNetwork(settings: Settings, automatic: Boolean): Boolean {

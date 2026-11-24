@@ -47,6 +47,75 @@ final class NocturneUITests: XCTestCase {
         add(attachment)
     }
 
+    @MainActor func testAlbumToolsAndTrackInformation() throws {
+        let app = XCUIApplication()
+        let server = "http://127.0.0.1:4533/track-tools-" + UUID().uuidString
+        app.launchArguments = ["--connect", server, "test", "demo", "-AppleLanguages", "(ru)"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Недавно добавлено"].waitForExistence(timeout: 25))
+        selectTab("Медиатека", in: app)
+        let album = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Mock Album")).firstMatch
+        XCTAssertTrue(album.waitForExistence(timeout: 15))
+        album.press(forDuration: 0.15)
+        let filter = app.textFields["album.filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 10))
+        for _ in 0..<3 where !filter.isHittable { app.swipeUp() }
+        app.swipeUp()
+        for _ in 0..<3 where !app.keyboards.firstMatch.exists {
+            filter.press(forDuration: 0.15)
+            _ = app.keyboards.firstMatch.waitForExistence(timeout: 3)
+        }
+        filter.typeText("трек 3\n")
+        let third = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Тестовый трек 3")).firstMatch
+        XCTAssertTrue(third.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Тестовый трек 1")).firstMatch.exists)
+        let keyboardHidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardHidden], timeout: 5), .completed)
+        for _ in 0..<3 where !app.buttons["Выбрать все"].exists {
+            app.buttons["Выбрать"].press(forDuration: 0.15)
+            _ = app.buttons["Выбрать все"].waitForExistence(timeout: 3)
+        }
+        app.buttons["Выбрать все"].press(forDuration: 0.15)
+        XCTAssertTrue(app.buttons["Выбрано: 1"].waitForExistence(timeout: 5))
+        app.swipeUp()
+        let checkbox = app.buttons["album.selection.t2"]
+        XCTAssertTrue(checkbox.waitForExistence(timeout: 5))
+        checkbox.press(forDuration: 0.15)
+        XCTAssertTrue(app.buttons["Выбрано: 0"].waitForExistence(timeout: 5))
+        app.buttons["Выбрать все"].press(forDuration: 0.15)
+        let listAttachment = XCTAttachment(screenshot: app.screenshot()); listAttachment.name = "Filtered album selection"; listAttachment.lifetime = .keepAlways; add(listAttachment)
+        app.buttons["Готово"].firstMatch.press(forDuration: 0.15)
+        third.press(forDuration: 0.15)
+        let open = app.buttons["player.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10)); open.press(forDuration: 0.15)
+        XCTAssertTrue(app.staticTexts["player.title"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["player.title"].label, "Тестовый трек 3")
+        if app.buttons["player.toggle"].label == "Пауза" { app.buttons["player.toggle"].press(forDuration: 0.15) }
+        app.buttons["player.information"].press(forDuration: 0.15)
+        XCTAssertTrue(app.staticTexts["Длительность в каталоге"].waitForExistence(timeout: 5))
+        let formatShown = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "WAV", "WAV")).firstMatch
+        if !formatShown.exists { print("TRACK_INFORMATION_TREE " + app.debugDescription) }
+        XCTAssertTrue(formatShown.exists)
+        app.buttons["Скопировать диагностику"].press(forDuration: 0.15)
+        XCTAssertTrue(app.buttons["Скопировано"].exists)
+        let infoAttachment = XCTAttachment(screenshot: app.screenshot()); infoAttachment.name = "Track information"; infoAttachment.lifetime = .keepAlways; add(infoAttachment)
+        app.buttons["Перескачать и перезапустить"].press(forDuration: 0.15)
+        XCTAssertTrue(app.staticTexts["Загрузка обновлена"].waitForExistence(timeout: 20))
+        app.buttons["player.information"].press(forDuration: 0.15)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Скачанная копия", "Скачанная копия")).firstMatch.waitForExistence(timeout: 5))
+        let fault = URL(string: "http://127.0.0.1:4533/fail-next-stream?id=t2")!
+        let ready = expectation(description: "Mock stream failure configured")
+        URLSession.shared.dataTask(with: fault) { _, response, _ in
+            if (response as? HTTPURLResponse)?.statusCode == 200 { ready.fulfill() }
+        }.resume()
+        wait(for: [ready], timeout: 5)
+        app.buttons["Перескачать и перезапустить"].press(forDuration: 0.15)
+        XCTAssertTrue(app.staticTexts["Не удалось обновить загрузку. Старая копия сохранена."].waitForExistence(timeout: 15))
+        app.buttons["Понятно"].press(forDuration: 0.15)
+        app.buttons["player.information"].press(forDuration: 0.15)
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Скачанная копия", "Скачанная копия")).firstMatch.waitForExistence(timeout: 5))
+    }
+
     /// Без mock-сервера: настоящие аудиоресурсы из Release-сборки должны играть на чистой установке.
     @MainActor func testDemoAudioPlayback() throws {
         let app = XCUIApplication()

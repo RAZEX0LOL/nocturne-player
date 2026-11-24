@@ -131,6 +131,7 @@ struct SongRow: View {
 struct MacSongTable: View {
     let songs: [Song]
     var remove: ((Int) -> Void)? = nil
+    var selection: Binding<Set<String>>? = nil
     var action: (Int) -> Void
 
     var body: some View {
@@ -145,7 +146,7 @@ struct MacSongTable: View {
             }.font(.system(size: 13)).foregroundStyle(Theme.secondary).padding(.horizontal, 14).frame(height: 36)
             Divider()
             ForEach(Array(songs.enumerated()), id: \.offset) { index, song in
-                MacSongTableRow(song: song, index: index, remove: remove.map { remove in { remove(index) } }, action: { action(index) })
+                MacSongTableRow(song: song, index: index, selection: selection, remove: remove.map { remove in { remove(index) } }, action: { action(index) }).id(song.id)
             }
         }.background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius(10)))
             .accessibilityIdentifier("mac.song-table")
@@ -155,6 +156,7 @@ struct MacSongTable: View {
 private struct MacSongTableRow: View {
     let song: Song
     let index: Int
+    var selection: Binding<Set<String>>? = nil
     var remove: (() -> Void)? = nil
     let action: () -> Void
     @Environment(LibraryStore.self) private var library
@@ -166,6 +168,13 @@ private struct MacSongTableRow: View {
         let selected = player.current?.id == song.id
         let unavailable = !player.isPlayable(song)
         HStack(spacing: 14) {
+            if let selection {
+                Button {
+                    if selection.wrappedValue.contains(song.id) { selection.wrappedValue.remove(song.id) }
+                    else { selection.wrappedValue.insert(song.id) }
+                } label: { Image(systemName: selection.wrappedValue.contains(song.id) ? "checkmark.circle.fill" : "circle") }
+                    .accessibilityLabel(String(localized: "Выбрать") + " " + song.title)
+            }
             Button {
                 if unavailable { player.show(String(localized: "Трек не скачан — недоступен без сети")) }
                 else { action() }

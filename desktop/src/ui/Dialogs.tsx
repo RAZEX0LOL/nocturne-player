@@ -7,6 +7,7 @@ import { t } from '../i18n'
  */
 
 type Request =
+  | { kind: 'info'; title: string; message: string; diagnostics: string; confirm: string; resolve: (value: boolean) => void }
   | { kind: 'text'; title: string; label?: string; initial: string; confirm: string; resolve: (value: string | null) => void }
   | { kind: 'confirm'; title: string; message: string; confirm: string; danger: boolean; resolve: (value: boolean) => void }
 
@@ -31,6 +32,10 @@ export function confirmAction(title: string, message: string, options: { confirm
   )
 }
 
+export function showInformation(title: string, message: string, diagnostics: string) {
+  show({ kind: 'info', title, message, diagnostics, confirm: t('Готово'), resolve: () => {} })
+}
+
 export function DialogHost() {
   const request = useSyncExternalStore(
     (listener) => {
@@ -44,6 +49,7 @@ export function DialogHost() {
 }
 
 function Dialog({ request }: { request: Request }) {
+  const [copied, setCopied] = useState(false)
   const [text, setText] = useState(request.kind === 'text' ? request.initial : '')
   const input = useRef<HTMLInputElement>(null)
   const confirmButton = useRef<HTMLButtonElement>(null)
@@ -92,10 +98,13 @@ function Dialog({ request }: { request: Request }) {
               <input ref={input} className="field" value={text} onChange={(event) => setText(event.target.value)} autoFocus />
             </label>
           ) : (
-            <p className="text-secondary">{request.message}</p>
+            <div className="max-h-[55vh] overflow-y-auto whitespace-pre-wrap break-words text-secondary">{request.message}</div>
           )}
         </div>
-        <div className="dialog-footer flex justify-end gap-2 px-6 py-4">
+        <div className="dialog-footer flex flex-wrap justify-end gap-2 px-6 py-4">
+          {request.kind === 'info' && <button type="button" className="btn" onClick={() => {
+            void navigator.clipboard.writeText(request.diagnostics).then(() => setCopied(true)).catch(() => setCopied(false))
+          }}>{copied ? t('Скопировано') : t('Скопировать диагностику')}</button>}
           <button
             ref={confirmButton}
             type="submit"
@@ -104,9 +113,9 @@ function Dialog({ request }: { request: Request }) {
           >
             {request.confirm}
           </button>
-          <button type="button" onClick={() => close(false)} className="btn min-w-24">
+          {request.kind !== 'info' && <button type="button" onClick={() => close(false)} className="btn min-w-24">
             {t('Отмена')}
-          </button>
+          </button>}
         </div>
       </form>
     </div>

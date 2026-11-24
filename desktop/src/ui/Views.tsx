@@ -252,7 +252,7 @@ export function AlbumView({ album }: { album: Album }) {
           </div>
         </div>
       </div>
-      {loaded ? <SongList songs={list} numbered /> : <SongListSkeleton />}
+      {loaded ? <SongList songs={list} numbered browse /> : <SongListSkeleton />}
       <About html={albumNotes[album.id]} />
     </div>
   )

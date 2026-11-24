@@ -138,6 +138,7 @@ class LocalLibrary(private val context: Context) {
             coverArt = cover?.let { FILE_COVER_PREFIX + it },
             duration = duration,
             track = track,
+            suffix = file.extension.lowercase(), size = file.length(),
         )
     }
 

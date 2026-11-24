@@ -3,10 +3,11 @@ import type { Song } from '../core/models'
 import { isLocalId } from '../core/source'
 import { store, useStore } from '../state/store'
 import { popupMenu, type MenuEntry } from '../shell'
-import { askText } from './Dialogs'
+import { askText, showInformation } from './Dialogs'
 import { beginDrag, registerDrop, useDrag, type DragPayload } from './drag'
 import { Icon } from './Icon'
 import { t } from '../i18n'
+import { appVersion } from '../platform'
 
 export function formatTime(seconds?: number) {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return ''
@@ -14,7 +15,7 @@ export function formatTime(seconds?: number) {
   return `${minutes}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 }
 
-type SortKey = 'title' | 'album' | 'rating' | 'duration'
+type SortKey = 'title' | 'album' | 'rating' | 'duration' | 'created' | 'artist'
 type Sort = { key: SortKey; descending: boolean } | undefined
 
 /** Звёзды оценки прямо в строке: клик по той же звезде снимает оценку. */
@@ -52,6 +53,21 @@ export function songMenu(songs: Song[], options: { onRemove?: () => void; remove
   const allStarred = server.length > 0 && server.every((song) => state.starredIds.has(song.id))
   const rating = single ? store.ratingOf(single) : 0
   return [
+    single && { text: t('Информация о треке'), action: async () => {
+      const data = { ...store.trackDiagnostics(single), version: await appVersion().catch(() => undefined) }
+      const source = data.source === 'local' ? t('Локальный файл') : data.source === 'download' ? t('Скачанная копия') : t('Сервер')
+      const rows = [
+        `${t('Название')}: ${single.title}`, `${t('Исполнитель')}: ${single.artist ?? '—'}`,
+        `${t('Источник')}: ${source}`, `${t('Длительность в каталоге')}: ${formatTime(single.duration) || '—'}`,
+        ...(data.playerDurationSeconds === undefined ? [] : [`${t('Длительность в плеере')}: ${formatTime(data.playerDurationSeconds)}`]),
+        `${t('Формат оригинала')}: ${single.suffix?.toUpperCase() ?? '—'}`,
+        `${t('Битрейт оригинала')}: ${single.bitRate ? `${single.bitRate} kbps` : '—'}`,
+        `${t('Частота оригинала')}: ${single.samplingRate ? `${single.samplingRate} Hz` : '—'}`,
+        `${t('Размер оригинала')}: ${single.size ? `${(single.size / 1048576).toFixed(1)} MB` : '—'}`,
+      ]
+      showInformation(t('Информация о треке'), rows.join('\n'), JSON.stringify(data, null, 2))
+    } },
+    online && single && !single.streamUrl && !isLocalId(single.id) && !state.downloading[single.id] && { text: t('Перескачать и перезапустить'), action: () => void store.repairTrack(single) },
     playable.length > 0 && {
       text: many ? t('Играть выбранные ({n})', { n: playable.length }) : t('Играть'),
       action: () => (options.playAll ? options.playAll() : void store.play(playable, 0)),
@@ -117,6 +133,7 @@ export function songMenu(songs: Song[], options: { onRemove?: () => void; remove
 export function SongList({
   songs,
   numbered = false,
+  browse = false,
   showAlbum = false,
   onRemove,
   removeLabel = t('Удалить'),
@@ -126,6 +143,7 @@ export function SongList({
 }: {
   songs: Song[]
   numbered?: boolean
+  browse?: boolean
   showAlbum?: boolean
   /** Удаление выделенного: треки и их позиции в исходном списке. */
   onRemove?: (songs: Song[], indexes: number[]) => void
@@ -138,6 +156,9 @@ export function SongList({
   const { queue, starredIds, playing, downloads, downloading, client, offline } = useStore()
   const currentId = queue?.current?.song.id
   const online = !!client && !offline
+  const [query, setQuery] = useState('')
+  const [revealId, setRevealId] = useState<string>()
+  const listRef = useRef<HTMLDivElement>(null)
   const [sort, setSort] = useState<Sort>()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const anchor = useRef<number | undefined>(undefined)
@@ -149,10 +170,14 @@ export function SongList({
   const numberWidth = `${Math.max(2, numberDigits) + 1}ch`
 
   const rows = useMemo(() => {
-    const indexed = songs.map((song, index) => ({ song, index }))
+    const normalize = (value: string) => value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase()
+    const text = normalize(query.trim())
+    const indexed = songs.map((song, index) => ({ song, index })).filter(({ song }) => !text || normalize(`${song.title} ${song.artist ?? ''} ${song.album ?? ''}`).includes(text))
     if (!sort) return indexed
     const value = (song: Song): string | number => {
       switch (sort.key) {
+        case 'created': return song.created ? Date.parse(song.created) || 0 : 0
+        case 'artist': return (song.artist ?? '').toLocaleLowerCase()
         case 'title': return song.title.toLocaleLowerCase()
         case 'album': return (song.album ?? '').toLocaleLowerCase()
         case 'rating': return store.ratingOf(song)
@@ -163,18 +188,18 @@ export function SongList({
       const left = value(a.song)
       const right = value(b.song)
       const order = typeof left === 'number' ? left - (right as number) : left.localeCompare(right as string, 'ru')
-      return order || a.index - b.index
+      return (sort.descending ? -order : order) || a.index - b.index
     })
-    return sort.descending ? sorted.reverse() : sorted
-  }, [songs, sort])
+    return sorted
+  }, [songs, sort, query])
 
   // Список сменился (другой альбом, плейлист обновился) — старое выделение ни к чему.
   useEffect(() => {
     setSelected(new Set())
     anchor.current = undefined
-  }, [songs])
+  }, [songs, sort, query])
 
-  const reorderable = !!onReorder && !sort
+  const reorderable = !!onReorder && !sort && !query.trim()
   useEffect(() => {
     if (!listKey) return
     return registerDrop(listKey, (payload: DragPayload, insertAt?: number) => {
@@ -185,6 +210,16 @@ export function SongList({
       onDropSongs?.(payload.songs, insertAt)
     })
   }, [listKey, reorderable, onReorder, onDropSongs])
+
+  useEffect(() => {
+    if (!revealId) return
+    const position = rows.findIndex(({ song }) => song.id === revealId)
+    if (position >= 0) {
+      listRef.current?.querySelector(`[data-song-row="${position}"]`)?.scrollIntoView({ block: 'center' })
+      setSelected(new Set([position]))
+      setRevealId(undefined)
+    }
+  }, [revealId, rows])
 
   if (!songs.length) return <p className="px-1 text-secondary">{t('Здесь пока пусто.')}</p>
 
@@ -256,7 +291,7 @@ export function SongList({
         anchor.current = next
         setSelected(new Set([next]))
       }
-      document.querySelector(`[data-song-row="${next}"]`)?.scrollIntoView({ block: 'nearest' })
+      listRef.current?.querySelector(`[data-song-row="${next}"]`)?.scrollIntoView({ block: 'nearest' })
     }
   }
 
@@ -277,7 +312,29 @@ export function SongList({
   const dropHere = (position: number) => drag?.target === listKey && reorderable && drag?.insertAt === position
 
   return (
-    <div className="song-table card overflow-hidden p-1" tabIndex={0} onKeyDown={onKeyDown} role="grid" aria-multiselectable>
+    <div className="space-y-3">
+      {(browse || songs.length >= 20) && <>
+      <div className="flex flex-wrap items-center gap-2">
+        <input className="field min-w-40 flex-1" aria-label={t('Поиск в списке')} placeholder={t('Поиск в списке')} value={query} onChange={(event) => setQuery(event.target.value)} />
+        <select className="field w-auto" aria-label={t('Порядок треков')} value={sort ? `${sort.key}:${sort.descending}` : ''} onChange={(event) => {
+          const [key, descending] = event.target.value.split(':')
+          setSort(key ? { key: key as SortKey, descending: descending === 'true' } : undefined)
+        }}>
+          <option value="">{t('Порядок альбома')}</option>
+          <option value="title:false">{t('По названию')}</option>
+          <option value="artist:false">{t('По исполнителю')}</option>
+          <option value="duration:false">{t('По длительности')}</option>
+          <option value="created:true">{t('Сначала новые')}</option>
+          {sort && !['title:false', 'artist:false', 'duration:false', 'created:true'].includes(`${sort.key}:${sort.descending}`) && <option value={`${sort.key}:${sort.descending}`}>
+            {t(({ title: 'Название', artist: 'Исполнитель', album: 'Альбом', rating: 'Оценка', duration: 'Время', created: 'Сначала новые' })[sort.key])} {sort.descending ? '↓' : '↑'}
+          </option>}
+        </select>
+        <button className="btn" disabled={!currentId || !songs.some((song) => song.id === currentId)} onClick={() => { setQuery(''); setRevealId(currentId) }}>{t('Текущий трек')}</button>
+        {selectedSongs.length > 0 && <button className="btn" onClick={() => void popupMenu(songMenu(selectedSongs, { onRemove: remove, removeLabel }))}>{t('Выбрано: {n}', { n: selectedSongs.length })}</button>}
+      </div>
+      <p className="text-xs text-secondary" aria-live="polite">{rows.length} / {songs.length}</p>
+      </>}
+    <div ref={listRef} className="song-table card overflow-hidden p-1" tabIndex={0} onKeyDown={onKeyDown} role="grid" aria-multiselectable>
       <div className="flex items-center gap-4 border-b border-stroke px-3 pb-1.5 pt-1">
         <span className="shrink-0 text-center text-xs text-secondary" style={{ width: numberWidth }}>#</span>
         {header('title', t('Название'), 'min-w-0 flex-1')}
@@ -423,6 +480,7 @@ export function SongList({
           {t('Выбрано: {n}', { n: selected.size })} · {formatTime(selectedSongs.reduce((sum, song) => sum + (song.duration ?? 0), 0))}
         </div>
       )}
+    </div>
     </div>
   )
 }

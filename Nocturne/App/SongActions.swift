@@ -3,12 +3,23 @@ import SwiftUI
 /// Menu items shared by song rows, album headers and the player: queueing, favourites, playlists.
 struct SongActions: View {
     let songs: [Song]
+    var showInformation: ((Song) -> Void)? = nil
     @Binding var addToPlaylist: Bool
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerStore.self) private var player
     @Environment(DownloadStore.self) private var downloads
 
     var body: some View {
+        if songs.count == 1, let song = songs.first {
+            Button { if let showInformation { showInformation(song) } else { player.informationSong = song } } label: {
+                Label(String(localized: "Информация о треке"), systemImage: "info.circle")
+            }
+            if library.isConnected, !LocalLibrary.isLocal(song.id), !song.id.hasPrefix("radio:"), !song.id.hasPrefix("radio-") {
+                Button { player.repair(song) } label: {
+                    Label(String(localized: "Перескачать и перезапустить"), systemImage: "arrow.clockwise.circle")
+                }.disabled(player.repairingSongID != nil || downloads.active[song.id] != nil || !player.network.isOnline)
+            }
+        }
         let onDevice = songs.allSatisfy { LocalLibrary.isLocal($0.id) }
         Button { player.playNext(songs, client: library.client) } label: { Label(String(localized: "Играть следующим"), systemImage: "text.line.first.and.arrowtriangle.forward") }
         Button { player.addToQueue(songs, client: library.client) } label: { Label(String(localized: "В конец очереди"), systemImage: "text.append") }
@@ -180,5 +191,71 @@ struct Toast: View {
         let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
         controller.popoverPresentationController?.sourceView = top.view
         top.present(controller, animated: true)
+    }
+}
+
+struct SongInformationView: View {
+    let song: Song
+    var onClose: (() -> Void)? = nil
+    @Environment(LibraryStore.self) private var library
+    @Environment(PlayerStore.self) private var player
+    @Environment(DownloadStore.self) private var downloads
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
+    private var rows: [(String, String)] {
+        var values: [(String, String)] = [
+            (String(localized: "Название"), song.title),
+            (String(localized: "Исполнитель"), song.artist ?? "—"),
+            (String(localized: "Источник"), player.playbackSource(for: song)),
+            (String(localized: "Длительность в каталоге"), song.duration.map(timeLabel) ?? "—"),
+            (String(localized: "Формат оригинала"), song.suffix?.uppercased() ?? "—"),
+            (String(localized: "Битрейт оригинала"), song.bitRate.map { "\($0) kbps" } ?? "—"),
+            (String(localized: "Частота оригинала"), song.samplingRate.map { "\($0) Hz" } ?? "—"),
+            (String(localized: "Размер оригинала"), song.size.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "—")
+        ]
+        if player.current?.id == song.id {
+            values.insert((String(localized: "Длительность в плеере"), timeLabel(player.duration)), at: 4)
+        }
+        if let item = downloads.items[song.id] {
+            values.append((String(localized: "Размер загрузки"), ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)))
+        }
+        return values
+    }
+
+    // Только явно разрешённые поля: ни подписанных URL, ни учётной записи, ни путей.
+    private var diagnostics: String {
+        var result: [String: String] = ["app": "Nocturne Player", "platform": "Apple", "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "", "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "", "title": song.title, "source": player.playbackSource(for: song)]
+        if let duration = song.duration { result["catalogDurationSeconds"] = String(duration) }
+        if player.current?.id == song.id {
+            result["playerDurationSeconds"] = String(player.duration)
+            result["positionSeconds"] = String(player.elapsed)
+            result["playing"] = String(player.isPlaying)
+        }
+        result["originalFormat"] = song.suffix
+        return (try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    LabeledContent(row.0, value: row.1).textSelection(.enabled)
+                }
+                if library.isConnected, !LocalLibrary.isLocal(song.id), !song.id.hasPrefix("radio-") {
+                    Button {
+                        if let onClose { onClose() } else { dismiss() }
+                        player.repair(song)
+                    } label: { Label(String(localized: "Перескачать и перезапустить"), systemImage: "arrow.clockwise.circle") }
+                        .disabled(player.repairingSongID != nil || downloads.active[song.id] != nil || !player.network.isOnline)
+                }
+                Button {
+                    UIPasteboard.general.string = diagnostics
+                    copied = true
+                } label: { Label(copied ? String(localized: "Скопировано") : String(localized: "Скопировать диагностику"), systemImage: "doc.on.doc") }
+            }
+            .navigationTitle(String(localized: "Информация о треке")).navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(String(localized: "Готово")) { if let onClose { onClose() } else { dismiss() } } } }
+        }
     }
 }
