@@ -2,6 +2,45 @@
   "$comment": "Что нового в каждой версии. Пишется при выпуске: без записи скрипты выпуска версию не опубликуют. Версия = 1.1.<число коммитов>, как номер сборки. kind: new | better | fix. platforms: mac, windows, linux, android, ios; у пункта — если он не для всех платформ версии.",
   "releases": [
     {
+      "version": "1.1.96",
+      "date": "2026-11-24",
+      "platforms": [
+        "ios",
+        "mac",
+        "windows",
+        "linux",
+        "android"
+      ],
+      "summary": "Восстановление треков и удобный поиск в альбомах",
+      "summary_en": "Track recovery and easier album browsing",
+      "changes": [
+        {
+          "kind": "new",
+          "text": "В меню трека появилась команда «Перескачать и перезапустить». Новая копия проверяется перед заменой; если загрузка не удалась, прежняя остаётся на месте.",
+          "text_en": "Track menus now offer Download again and restart. The new copy is checked before replacement; if the download fails, the previous copy is kept."
+        },
+        {
+          "kind": "new",
+          "text": "В информации о треке видны источник звука, длительность в каталоге и плеере, формат, битрейт, частота и размер оригинала. Диагностику можно скопировать без паролей, токенов и адреса сервера.",
+          "text_en": "Track information shows the audio source, catalog and player duration, and the original format, bitrate, sample rate and size. Diagnostics can be copied without passwords, tokens or the server address."
+        },
+        {
+          "kind": "better",
+          "text": "В альбомах доступны поиск, сортировка, переход к текущему треку и выбор нескольких треков для общих действий. Воспроизведение учитывает показанный порядок.",
+          "text_en": "Albums now support filtering, sorting, revealing the current track and selecting multiple tracks for group actions. Playback follows the displayed order."
+        },
+        {
+          "kind": "fix",
+          "platforms": [
+            "ios",
+            "mac"
+          ],
+          "text": "На iPhone, iPad и Mac из App Store ошибки восстановления показываются поверх открытого плеера. Исправлена проверка скачанного аудиофайла перед заменой.",
+          "text_en": "On iPhone, iPad and the Mac App Store app, recovery errors appear above the open player. Fixed audio-file validation before replacing a download."
+        }
+      ]
+    },
+    {
       "version": "1.1.94",
       "date": "2026-11-10",
       "platforms": [
