@@ -284,6 +284,8 @@ class Store {
   private transport = { position: 0, duration: 0 }
   private viewState?: State
   private catalogTimer?: ReturnType<typeof setTimeout>
+  private albumRevision = 0
+  private albumPage?: object
 
   private repository(account = this.queueOwner) { return account ? new AccountRepository(localStorage, account) : undefined }
 
@@ -291,6 +293,8 @@ class Store {
     this.persistCatalog()
     clearTimeout(this.catalogTimer)
     this.epoch.next()
+    this.albumRevision += 1
+    this.albumPage = undefined
     clearTimeout(this.queueSyncTimer)
     this.engine.pause()
     this.listening = undefined
@@ -679,7 +683,10 @@ class Store {
   back() {
     const history = [...this.state.history]
     const view = history.pop()
-    if (view) this.patch({ view, history })
+    if (view) {
+      this.patch({ view, history })
+      void this.load(view)
+    }
   }
 
   private get online() {
@@ -696,7 +703,8 @@ class Store {
     try {
       switch (view.kind) {
         case 'album':
-          if (!this.state.songs[view.album.id]) putSongs(view.album.id, await client.albumSongs(view.album.id))
+          // Кэш нужен без сети; на сервере в старом альбоме уже могут быть новые треки.
+          putSongs(view.album.id, await client.albumSongs(view.album.id))
           if (this.state.albumNotes[view.album.id] === undefined) {
             const notes = await client.albumNotes(view.album.id).catch(() => undefined)
             commit({ albumNotes: { ...this.state.albumNotes, [view.album.id]: notes ?? '' } })
@@ -706,7 +714,7 @@ class Store {
           putSongs(view.playlist.id, await client.playlistSongs(view.playlist.id))
           break
         case 'artist':
-          if (!this.state.artistAlbums[view.artist.id]) {
+          {
             const { albums } = await client.artist(view.artist.id)
             commit({ artistAlbums: { ...this.state.artistAlbums, [view.artist.id]: albums } })
           }
@@ -723,17 +731,16 @@ class Store {
           if (!this.state.albums.length) await this.moreAlbums()
           break
         case 'artists':
-          if (!this.state.artists.length) commit({ artists: await client.artists() })
+          commit({ artists: await client.artists() })
           break
         case 'playlists':
           commit({ playlists: await client.playlists() })
           break
         case 'genres':
-          if (!this.state.genres.length) commit({ genres: await client.genres() })
+          commit({ genres: await client.genres() })
           break
         case 'genre':
-          if (!this.state.genreAlbums[view.genre])
-            commit({ genreAlbums: { ...this.state.genreAlbums, [view.genre]: await client.albumsByGenre(view.genre) } })
+          commit({ genreAlbums: { ...this.state.genreAlbums, [view.genre]: await client.albumsByGenre(view.genre) } })
           break
         case 'radio':
           commit({ radio: await client.radioStations() })
@@ -770,7 +777,11 @@ class Store {
       const recent = await client.albums('newest', 0, 24)
       if (!current()) return
       commit({ recent, offline: false, error: undefined })
-      void this.load(this.state.view)
+      await Promise.all([
+        this.refreshAlbums(),
+        this.load(this.state.view),
+        this.state.view.kind === 'search' && this.state.search ? this.search(this.state.search.query) : undefined,
+      ])
     } catch (error) {
       if (error instanceof MusicError && error.kind === 'auth') commit({ error: error.message })
       else if (error instanceof MusicError && error.kind === 'network') commit({ offline: true })
@@ -798,7 +809,7 @@ class Store {
     const commit = (change: Partial<State>) => { if (validSession()) this.patch(change) }
     const client = this.state.client
     let songs = this.state.songs[album.id]
-    if (!songs && client && this.online) {
+    if (client && this.online) {
       try {
         songs = await client.albumSongs(album.id)
         if (validSession()) this.putSongs(album.id, songs)
@@ -814,11 +825,44 @@ class Store {
   /** Все альбомы по алфавиту, порциями: большие библиотеки иначе грузились бы минуту. */
   async moreAlbums() {
     const current = this.epoch.capture()
-    const commit = (change: Partial<State>) => { if (current()) this.patch(change) }
     const client = this.state.client
-    if (!client || this.state.albumsComplete || !this.online) return
-    const page = await client.albums('alphabeticalByName', this.state.albums.length, PAGE)
-    commit({ albums: [...this.state.albums, ...page], albumsComplete: page.length < PAGE })
+    if (!client || this.albumPage || this.state.albumsComplete || !this.online) return
+    const request = this.albumPage = {}
+    const revision = this.albumRevision
+    try {
+      const page = await client.albums('alphabeticalByName', this.state.albums.length, PAGE)
+      if (current() && revision === this.albumRevision)
+        this.patch({ albums: [...this.state.albums, ...page], albumsComplete: page.length < PAGE })
+    } catch (error) {
+      if (current() && revision === this.albumRevision)
+        this.patch({ error: error instanceof Error ? error.message : t('Не удалось загрузить раздел.') })
+    } finally {
+      if (this.albumPage === request) this.albumPage = undefined
+    }
+  }
+
+  private async refreshAlbums() {
+    const client = this.state.client
+    const count = this.state.albums.length
+    if (!client || !count) return
+    const current = this.epoch.capture()
+    const revision = ++this.albumRevision
+    const request = this.albumPage = {}
+    const albums: Album[] = []
+    try {
+      let complete = false
+      // Offset старого списка после добавления альбома уже неверен. Заменяем весь загруженный
+      // префикс одним обновлением, а до успеха оставляем старый каталог доступным.
+      while (albums.length < count && !complete) {
+        const page = await client.albums('alphabeticalByName', albums.length, PAGE)
+        if (!current() || revision !== this.albumRevision) return
+        albums.push(...page)
+        complete = page.length < PAGE
+      }
+      this.patch({ albums, albumsComplete: complete })
+    } finally {
+      if (this.albumPage === request) this.albumPage = undefined
+    }
   }
 
   pendingQuery = ''
@@ -901,7 +945,7 @@ class Store {
     const commit = (change: Partial<State>) => { if (validSession()) this.patch(change) }
     const client = this.state.client
     let songs = this.state.songs[playlist.id]
-    if (!songs && client && this.online) {
+    if (client && this.online) {
       try {
         songs = await client.playlistSongs(playlist.id)
         if (validSession()) this.putSongs(playlist.id, songs)

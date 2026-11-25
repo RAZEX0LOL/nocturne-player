@@ -93,7 +93,7 @@ def main():
             available(1431)
             vite = start('vite', ['bunx', 'vite', '--port', '1431', '--strictPort'], ROOT / 'desktop')
             ready('http://localhost:1431/src/main.tsx', vite)
-            for name in ['lifecycle', 'smoke', 'library', 'sync', 'smart', 'transitions', 'triz']:
+            for name in ['lifecycle', 'catalog-refresh', 'smoke', 'library', 'sync', 'smart', 'transitions', 'triz']:
                 if name == 'transitions':
                     stop(mock)
                     mock = start('mock-short', ['python3', 'shared/mock-server/mock_navidrome.py', '8'])
