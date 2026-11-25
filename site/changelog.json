@@ -2,6 +2,32 @@
   "$comment": "Что нового в каждой версии. Пишется при выпуске: без записи скрипты выпуска версию не опубликуют. Версия = 1.1.<число коммитов>, как номер сборки. kind: new | better | fix. platforms: mac, windows, linux, android, ios; у пункта — если он не для всех платформ версии.",
   "releases": [
     {
+      "version": "1.1.99",
+      "date": "2026-11-25",
+      "platforms": ["ios", "mac", "windows", "linux", "android"],
+      "summary": "Общий выпуск для всех платформ",
+      "summary_en": "A shared release for every platform",
+      "changes": [
+        {
+          "kind": "better",
+          "text": "Приложения для iPhone, iPad, Mac, Windows, Linux и Android выпускаются с общей версией 1.1.99.",
+          "text_en": "The iPhone, iPad, Mac, Windows, Linux and Android apps share release version 1.1.99."
+        },
+        {
+          "kind": "fix",
+          "platforms": ["mac", "windows", "linux"],
+          "text": "В версиях Windows, Linux и Mac, устанавливаемой файлом, новые треки в существующих альбомах больше не скрываются за старым кэшем. Открытие альбома и кнопка «Обновить» перечитывают его состав с Navidrome.",
+          "text_en": "In the Windows, Linux and downloadable Mac apps, new tracks added to existing albums are no longer hidden by an old cache. Opening an album or pressing Refresh reloads its tracks from Navidrome."
+        },
+        {
+          "kind": "fix",
+          "platforms": ["mac", "windows", "linux"],
+          "text": "В этих настольных версиях обновляются все уже загруженные страницы каталога. Исправлены дубликаты и пропуски при одновременной загрузке страниц; при ошибке сервера сохранённая медиатека остаётся доступной.",
+          "text_en": "These desktop apps refresh all previously loaded catalog pages. Fixed duplicates and missing entries during concurrent page loads; cached library data remains available if the server request fails."
+        }
+      ]
+    },
+    {
       "version": "1.1.98",
       "date": "2026-11-25",
       "platforms": ["windows"],
